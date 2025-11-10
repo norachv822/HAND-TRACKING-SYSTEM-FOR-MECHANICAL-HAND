@@ -1,0 +1,62 @@
+import oscP5.*;
+import netP5.*;
+
+OscP5 oscP5; //gestisce il ricevimento di pacchetti OSC (Open Sound Control)
+float fx = 0.5;
+float fy = 0.5;
+float fx1 = 0.5;
+float fy1 = 0.5;
+float fx2 = 0.5;
+float fy2 = 0.5;
+float fx3 = 0.5;
+float fy3 = 0.5;
+float fx4 = 0.5;
+float fy4 = 0.5;
+
+float x = random(100, 700);
+float y = random(100, 500);
+
+void setup() {
+  size(800, 800);
+  oscP5 = new OscP5(this, 12000); //inizializza il listener OSC sulla porta 12000 (corrisponde al Python).
+  noStroke();
+  fill(255, 0, 0);
+}
+
+void draw() {
+  background(0);
+  ellipse(fx * width, fy * height, 40, 40);
+  ellipse(fx1 * width, fy1 * height, 40, 40);
+  ellipse(fx2 * width, fy2 * height, 40, 40);
+  ellipse(fx3 * width, fy3 * height, 40, 40);
+  ellipse(fx4 * width, fy4 * height, 40, 40);
+  ellipse(x, y, 30, 30);
+  
+   if ((fx * width >= x -30 && fy * height <= y + 30) && (fx * width <= x + 30 && fy * height >= y -30 )){
+   fill(0, 255, 0);
+  }
+  
+}
+
+void oscEvent(OscMessage msg) { //funzione che viene chiamata automaticamente quando arriva un messaggio OSC.
+  if (msg.checkAddrPattern("/pollice")) { //controlla che il messaggio arrivi dall’indirizzo /finger (stesso inviato dal Python).
+    fx = msg.get(0).floatValue(); //aggiorna fx con il primo valore ricevuto (coordinata x normalizzata).
+    fy = msg.get(1).floatValue(); //aggiorna fy con il secondo valore ricevuto (coordinata y normalizzata).
+  }
+  if (msg.checkAddrPattern("/indice")) { //controlla che il messaggio arrivi dall’indirizzo /finger (stesso inviato dal Python).
+    fx1 = msg.get(0).floatValue(); //aggiorna fx con il primo valore ricevuto (coordinata x normalizzata).
+    fy1 = msg.get(1).floatValue(); //aggiorna fy con il secondo valore ricevuto (coordinata y normalizzata).
+  }
+  if (msg.checkAddrPattern("/medio")) { //controlla che il messaggio arrivi dall’indirizzo /finger (stesso inviato dal Python).
+    fx2 = msg.get(0).floatValue(); //aggiorna fx con il primo valore ricevuto (coordinata x normalizzata).
+    fy2 = msg.get(1).floatValue(); //aggiorna fy con il secondo valore ricevuto (coordinata y normalizzata).
+  }
+  if (msg.checkAddrPattern("/m")) { //controlla che il messaggio arrivi dall’indirizzo /finger (stesso inviato dal Python).
+    fx3 = msg.get(0).floatValue(); //aggiorna fx con il primo valore ricevuto (coordinata x normalizzata).
+    fy3 = msg.get(1).floatValue(); //aggiorna fy con il secondo valore ricevuto (coordinata y normalizzata).
+  }
+  if (msg.checkAddrPattern("/mi")) { //controlla che il messaggio arrivi dall’indirizzo /finger (stesso inviato dal Python).
+    fx4 = msg.get(0).floatValue(); //aggiorna fx con il primo valore ricevuto (coordinata x normalizzata).
+    fy4 = msg.get(1).floatValue(); //aggiorna fy con il secondo valore ricevuto (coordinata y normalizzata).
+  }
+}
