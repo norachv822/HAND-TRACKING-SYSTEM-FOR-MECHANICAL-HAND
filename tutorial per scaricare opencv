@@ -1,4 +1,0 @@
-1) step --> scaricare py v3.10.x
-2) check casella "Add PATH"
-3) apri cmd --> comando--> pip install opencv-python python-osc
-4) lascia scaricare tutti i file

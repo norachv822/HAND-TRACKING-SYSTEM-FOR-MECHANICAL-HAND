@@ -1,0 +1,38 @@
+PACKAGES DOWNLOAD GUIDE
+
+Installazione con terminale
+  puoi usare Command Prompt (CMD), PowerShell, Windows Terminal, terminale integrato di VS Code oppure PyCharm
+
+Installare Python
+  I pacchetti funzionano con le versioni 3.10.X di Pyhton
+
+Se Python è già installato
+  per controllare la versione usa il comando "python --version"
+  es:
+    Microsoft Windows [Versione 10.0.26200.7019]
+    (c) Microsoft Corporation. Tutti i diritti riservati.
+
+    C:\Users\norac>python --version
+    Python 3.10.11
+
+Aggiornare pip
+  usa il comando "python -m pip install --upgrade pip setuptools wheel"
+
+Installa MediaPipe
+  pip install mediapipe
+Installa OpenCV
+  pip install opencv-python
+Installa OSC
+  pip install python-osc
+
+Oppure installarli tutti insieme:
+  pip install mediapipe opencv-python python-osc
+
+verifica l'installazione dei pacchetti
+ All’interno di qualsiasi ambiente Python (IDLE, VS Code, PyCharm, ecc.) esegui:
+    import cv2
+    import mediapipe as mp
+    from pythonosc.udp_client import SimpleUDPClient
+
+    print("OpenCV:", cv2.__version__)
+    print("MediaPipe:", mp.__version__)
