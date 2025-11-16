@@ -1,0 +1,50 @@
+import oscP5.*;
+import netP5.*;
+
+OscP5 oscP5; //gestisce il ricevimento di pacchetti OSC (Open Sound Control)
+float fxti = 0.5;
+float fyti = 0.5;
+float fxtp = 0.5;
+float fytp = 0.5;
+float fxmcpi = 0.5;
+float fymcpi = 0.5;
+float fxmcpp = 0.5;
+float fymcpp = 0.5;
+float d; //variabile distanza tra due punti
+
+void setup() {
+  size(800, 800);
+  oscP5 = new OscP5(this, 9000); //inizializza il listener OSC sulla porta 12000 (corrisponde al Python).
+  stroke(255); //opzionale --> il colore bianco serve solo per rendere visibile la linea costruita 
+  fill(255, 0, 0); 
+}
+
+void draw() {
+  background(0);
+  ellipse(fxti * width, fyti * height, 40, 40);  //indice
+  //ellipse(fxtp * width, fytp * height, 40, 40);
+  ellipse( fxmcpi * width, fymcpi * height, 40, 40); //base dell'indice
+  line(fxti * width, fyti * height, fxmcpi * width, fymcpi * height); //linea di congiuzione indice-base dell'indice
+  d = dist(fxti * width, fyti * height, fxmcpi * width, fymcpi * height); //calcola la distanza indice-base dell'indice
+  println(d); //restituisce la distasnza nel terminale
+  
+}
+
+void oscEvent(OscMessage msg) { 
+  if (msg.checkAddrPattern("/indice")) { 
+    fxti = msg.get(0).floatValue(); 
+    fyti = msg.get(1).floatValue(); 
+  }
+  /*if (msg.checkAddrPattern("/pollice")) { 
+    fxtp = msg.get(0).floatValue(); 
+    fytp = msg.get(1).floatValue(); 
+  }*/
+  if (msg.checkAddrPattern("/indicemcp")) { 
+    fxmcpi = msg.get(0).floatValue(); 
+    fymcpi = msg.get(1).floatValue(); 
+  }
+  /*if (msg.checkAddrPattern("/pollicemcp")) { 
+    fxmcpp = msg.get(0).floatValue(); 
+    fymcpp = msg.get(1).floatValue(); 
+  }*/
+}
