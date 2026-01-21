@@ -25,7 +25,7 @@ Installa OpenCV
 Installa OSC
   "pip install python-osc"
 
-Oppure installarli tutti insieme:
+Per installarli tutti insieme:
   "pip install mediapipe opencv-python python-osc"
 
 verifica l'installazione dei pacchetti
