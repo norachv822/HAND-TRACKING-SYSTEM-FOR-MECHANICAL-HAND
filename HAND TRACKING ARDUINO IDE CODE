@@ -1,0 +1,53 @@
+#include <Servo.h>
+
+Servo servoIndexFinger;
+Servo servoMiddleFinger;
+Servo servoRingFinger;
+Servo servoPinkyFinger;
+
+void setup() {
+  Serial.begin(9600);
+
+  // Servo attaccati ai pin corrispondenti *sostituire nx con pin
+  servoIndex.attach(n1);   // indice
+  servoMiddle.attach(n2);  // medio
+  servoRing.attach(n3);    // anulare
+  servoPinky.attach(n4);   // mignolo
+
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    // Legge la stringa di dati da py
+    String data = Serial.readStringUntil('\n');
+    data.trim(); // rimuove spazi non necessari alla fine
+
+    // Formato di arrivo: "index_angle,middle_angle,ring_angle,pinky_angle"
+    int comma1 = data.indexOf(',');
+    int comma2 = data.indexOf(',', comma1 + 1);
+    int comma3 = data.indexOf(',', comma2 + 1);
+
+    if (comma1 > 0 && comma2 > 0 && comma3 > 0) {
+      int angleIndexFinger  = data.substring(0, comma1).toInt();
+      int angleMiddleFinger = data.substring(comma1 + 1, comma2).toInt();
+      int angleRingFinger   = data.substring(comma2 + 1, comma3).toInt();
+      int anglePinkyFinger  = data.substring(comma3 + 1).toInt();
+
+      angleIndexFinger  = constrain(angleIndexFinger, 0, 180);
+      angleMiddleFinger = constrain(angleMiddleFinger, 0, 180);
+      angleRingFinger   = constrain(angleRingFinger, 0, 180);
+      anglePinkyFinger  = constrain(anglePinkyFinger, 0, 180);
+
+      servoIndexFinger.write(angleIndexFinger);
+      servoMiddleFinger.write(angleMiddleFinger);
+      servoRingFinger.write(angleRingFinger);
+      servoPinkyFinger.write(anglePinkyFinger);
+
+      /*
+      Serial.print("Index: "); Serial.print(angleIndexFinger);
+      Serial.print(" | Middle: "); Serial.print(angleMiddleFinger);
+      Serial.print(" | Ring: "); Serial.print(angleRingFinger);
+      Serial.print(" | Pinky: "); Serial.println(anglePinkyFinger);*/
+    }
+  }
+}
