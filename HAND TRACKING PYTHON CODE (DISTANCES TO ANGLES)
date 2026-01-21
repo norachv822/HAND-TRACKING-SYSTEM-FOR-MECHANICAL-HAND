@@ -1,0 +1,131 @@
+
+import cv2
+import mediapipe as mp
+import math
+import serial
+import time
+
+# ===== SERIAL =====
+arduino = serial.Serial('COM4', 9600)  
+time.sleep(2)
+
+# ===== MEDIAPIPE =====
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    max_num_hands=1,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.7
+)
+mp_draw = mp.solutions.drawing_utils
+
+cap = cv2.VideoCapture(0)
+
+# distanza minima e massima
+MIN_DIST = 30
+MAX_DIST = 240
+#ERROR_DIST = 40
+
+def map_value(val, in_min, in_max, out_min, out_max):
+    if in_min == in_max:
+        return out_min
+    val = max(in_min, min(val, in_max))
+    return int((val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+
+def on_range(distance1, distance2, distance3):
+    if distance1 < 250.00 and distance1 > 165.00 and distance2 > 75.00 and distance3 > 160.00:
+        return True
+    else:
+        return False   
+
+LAND_MARKS_TIP = {
+    "thumb_tip": 4,
+    "index_finger_tip": 8, "middle_finger_tip": 12, 
+    "ring_finger_tip": 16, "pinky_finger_tip": 20, 
+}
+LAND_MARKS_BASE = {
+    "thumb_base": 1,
+    "index_finger_base": 5, "middle_finger_base": 9, 
+    "ring_finger_base": 13, "pinky_finger_base": 17, 
+    "wrist": 0
+}
+
+while True:
+    success, img = cap.read()
+    if not success:
+        break
+
+    img = cv2.flip(img, 1)
+    h, w, _ = img.shape
+    
+    # ===== MEDIAPIPE PROCESS =====
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb)
+
+    if results.multi_hand_landmarks:
+        for handLms in results.multi_hand_landmarks:
+            fingers_tip_coordinates = {
+                finger_type: (
+                    int(handLms.landmark[i].x * w),
+                    int(handLms.landmark[i].y * h)
+                )
+                for finger_type, i in LAND_MARKS_TIP.items()
+            }
+            fingers_base_coordinates = {
+                finger_type: (
+                    int(handLms.landmark[i].x * w),
+                    int(handLms.landmark[i].y * h)
+                )
+                for finger_type, i in LAND_MARKS_BASE.items()
+            }
+            dist_tip_base_index_finger = math.hypot(
+                fingers_base_coordinates["index_finger_base"][0] - fingers_tip_coordinates["index_finger_tip"][0],
+                fingers_base_coordinates["index_finger_base"][1] - fingers_tip_coordinates["index_finger_tip"][1]
+            )
+            dist_tip_base_middle_finger = math.hypot(
+                fingers_base_coordinates["middle_finger_base"][0] - fingers_tip_coordinates["middle_finger_tip"][0],
+                fingers_base_coordinates["middle_finger_base"][1] - fingers_tip_coordinates["middle_finger_tip"][1]
+            )
+            dist_tip_base_ring_finger = math.hypot(
+                fingers_base_coordinates["ring_finger_base"][0] - fingers_tip_coordinates["ring_finger_tip"][0],
+                fingers_base_coordinates["ring_finger_base"][1] - fingers_tip_coordinates["ring_finger_tip"][1]
+            )
+            dist_tip_base_pinky_finger = math.hypot(
+                fingers_base_coordinates["pinky_finger_base"][0] - fingers_tip_coordinates["pinky_finger_tip"][0],
+                fingers_base_coordinates["pinky_finger_base"][1] - fingers_tip_coordinates["pinky_finger_tip"][1]
+            )
+            dist_on_range1 = math.hypot(
+                fingers_base_coordinates["wrist"][0] - fingers_base_coordinates["index_finger_base"][0],
+                fingers_base_coordinates["wrist"][1] - fingers_base_coordinates["index_finger_base"][1]
+            )
+            dist_on_range2 = math.hypot(
+                fingers_base_coordinates["index_finger_base"][0] - fingers_base_coordinates["pinky_finger_base"][0],
+                fingers_base_coordinates["index_finger_base"][1] - fingers_base_coordinates["pinky_finger_base"][1]
+            )
+            dist_on_range3 = math.hypot(
+                fingers_base_coordinates["wrist"][0] - fingers_base_coordinates["middle_finger_base"][0],
+                fingers_base_coordinates["wrist"][1] - fingers_base_coordinates["middle_finger_base"][1]
+            )
+            index_angle = map_value(dist_tip_base_index_finger, MIN_DIST, MAX_DIST, 180, 0)
+            middle_angle = map_value(dist_tip_base_middle_finger, MIN_DIST, MAX_DIST, 180, 0)
+            ring_angle = map_value(dist_tip_base_ring_finger, MIN_DIST, MAX_DIST, 180, 0)
+            pinky_angle = map_value(dist_tip_base_pinky_finger, MIN_DIST, MAX_DIST, 180, 0)
+
+            if on_range(dist_on_range1, dist_on_range2, dist_on_range3) == True:
+                arduino.write(f"{index_angle},{middle_angle},{ring_angle},{pinky_angle}\n".encode())
+                landmark_color = (0, 255, 0)  
+                connection_color = (0, 255, 0)
+                status_text = "IN RANGE"
+            else:
+                arduino.write(f"{0},{0},{0},{0}\n".encode())
+                landmark_color = (0, 0, 255)  
+                connection_color = (0, 0, 255)
+                status_text = "OUT OF RANGE"
+            mp_draw.draw_landmarks(img, handLms, mp_hands.HAND_CONNECTIONS, landmark_drawing_spec=mp_draw.DrawingSpec(color=landmark_color, thickness=4, circle_radius=4),
+            connection_drawing_spec=mp_draw.DrawingSpec(color=connection_color, thickness=2))
+    cv2.imshow("Hand → Servo Control", img)
+
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC
+        break
+cap.release()
+arduino.close()
+cv2.destroyAllWindows()
