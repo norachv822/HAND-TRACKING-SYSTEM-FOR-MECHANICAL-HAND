@@ -1,0 +1,268 @@
+import cv2
+import mediapipe as mp
+import math
+import serial
+import time
+
+# ================= SERIAL =================
+#arduino = serial.Serial('COM3', 9600)
+time.sleep(2)
+last_send = 0
+
+# ================= MEDIAPIPE =================
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    max_num_hands=1,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.7
+)
+
+mp_draw = mp.solutions.drawing_utils
+cap = cv2.VideoCapture(0)
+
+# ================= CALIBRATION =================
+CALIBRATION_FRAMES = 180
+calibration_counter = 0
+calibrated = False
+
+prev_values = [0] * 9
+alpha = 0.7
+
+MIN_DIST = {
+    "index": 1e9,
+    "middle": 1e9,
+    "ring": 1e9,
+    "pinky": 1e9,
+    "thumb": 1e9,
+    "im": 1e9,
+    "mr": 1e9,
+    "rp": 1e9,
+    "ti": 1e9
+}
+
+MAX_DIST = {
+    "index": 0,
+    "middle": 0,
+    "ring": 0,
+    "pinky": 0,
+    "thumb": 0,
+    "im": 0,
+    "mr": 0,
+    "rp": 0,
+    "ti": 0
+}
+
+# ================= LANDMARKS =================
+LAND_MARKS_TIP = {
+    "thumb_tip": 4,
+    "index_finger_tip": 8,
+    "middle_finger_tip": 12,
+    "ring_finger_tip": 16,
+    "pinky_finger_tip": 20
+}
+
+LAND_MARKS_BASE = {
+    "thumb_base": 1,
+    "index_finger_base": 5,
+    "middle_finger_base": 9,
+    "ring_finger_base": 13,
+    "pinky_finger_base": 17,
+    "wrist": 0
+}
+
+# ================= SAFE FUNCTIONS =================
+def safe(x):
+    if x is None or math.isnan(x) or math.isinf(x):
+        return 0
+    return x
+
+
+def proportions(d1, d2):
+    if d2 == 0:
+        return 0
+    return safe(d1 / d2)
+
+
+def map_value(val, in_min, in_max, out_min, out_max):
+    val = safe(val)
+
+    if in_min == in_max:
+        return out_min
+
+    val = max(in_min, min(val, in_max))
+    return int((val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+
+
+# ================= DIST =================
+def dist(base, tip, fingers_base, fingers_tip):
+    if base not in fingers_base or tip not in fingers_tip:
+        return 0
+    return math.hypot(
+        fingers_base[base][0] - fingers_tip[tip][0],
+        fingers_base[base][1] - fingers_tip[tip][1]
+    )
+
+
+# ================= THUMB FIX =================
+def thumb_extension(fingers_tip, fingers_base):
+
+    wrist = fingers_base["wrist"]
+    thumb_tip = fingers_tip["thumb_tip"]
+    index_base = fingers_base["index_finger_base"]
+
+    v1 = (thumb_tip[0] - wrist[0], thumb_tip[1] - wrist[1])
+    v2 = (index_base[0] - wrist[0], index_base[1] - wrist[1])
+
+    mag1 = math.hypot(v1[0], v1[1])
+    mag2 = math.hypot(v2[0], v2[1])
+
+    if mag1 == 0 or mag2 == 0:
+        return 0
+
+    dot = v1[0] * v2[0] + v1[1] * v2[1]
+    cos_angle = max(-1, min(1, dot / (mag1 * mag2)))
+
+    return math.degrees(math.acos(cos_angle))  # 0–180
+
+
+# ================= MAIN LOOP =================
+while True:
+
+    success, img = cap.read()
+    if not success:
+        break
+
+    img = cv2.flip(img, 1)
+    h, w, _ = img.shape
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb)
+
+    if results.multi_hand_landmarks:
+
+        for handLms in results.multi_hand_landmarks:
+
+            fingers_tip = {
+                k: (int(handLms.landmark[i].x * w), int(handLms.landmark[i].y * h))
+                for k, i in LAND_MARKS_TIP.items()
+            }
+
+            fingers_base = {
+                k: (int(handLms.landmark[i].x * w), int(handLms.landmark[i].y * h))
+                for k, i in LAND_MARKS_BASE.items()
+            }
+#pin laterali 
+            # ================= FLEXION =================
+            feedback = dist("wrist", "middle_finger_tip", fingers_base, fingers_tip)
+
+            a = proportions(dist("index_finger_base", "index_finger_tip", fingers_base, fingers_tip), feedback)
+            b = proportions(dist("middle_finger_base", "middle_finger_tip", fingers_base, fingers_tip), feedback)
+            c = proportions(dist("ring_finger_base", "ring_finger_tip", fingers_base, fingers_tip), feedback)
+            d = proportions(dist("pinky_finger_base", "pinky_finger_tip", fingers_base, fingers_tip), feedback)
+
+            if any(math.isnan(x) for x in [a, b, c, d]):
+                continue
+
+            # ================= THUMB =================
+            t = thumb_extension(fingers_tip, fingers_base)
+
+            # ================= ABDUCTION =================
+            im = dist("index_finger_tip", "middle_finger_tip", fingers_base, fingers_tip)
+            mr = dist("middle_finger_tip", "ring_finger_tip", fingers_base, fingers_tip)
+            rp = dist("ring_finger_tip", "pinky_finger_tip", fingers_base, fingers_tip)
+            ti = dist("thumb_tip", "index_finger_tip", fingers_base, fingers_tip)
+
+            # ================= CALIBRATION =================
+            if not calibrated:
+
+                calibration_counter += 1
+
+                for key, val in zip(
+                    ["index", "middle", "ring", "pinky"],
+                    [a, b, c, d]
+                ):
+                    MIN_DIST[key] = min(MIN_DIST[key], val)
+                    MAX_DIST[key] = max(MAX_DIST[key], val)
+
+                MIN_DIST["thumb"] = min(MIN_DIST["thumb"], t)
+                MAX_DIST["thumb"] = max(MAX_DIST["thumb"], t)
+
+                MIN_DIST["im"] = min(MIN_DIST["im"], im)
+                MAX_DIST["im"] = max(MAX_DIST["im"], im)
+
+                MIN_DIST["mr"] = min(MIN_DIST["mr"], mr)
+                MAX_DIST["mr"] = max(MAX_DIST["mr"], mr)
+
+                MIN_DIST["rp"] = min(MIN_DIST["rp"], rp)
+                MAX_DIST["rp"] = max(MAX_DIST["rp"], rp)
+
+                MIN_DIST["ti"] = min(MIN_DIST["ti"], ti)
+                MAX_DIST["ti"] = max(MAX_DIST["ti"], ti)
+
+                cv2.putText(
+                    img,
+                    f"CALIBRATING {calibration_counter}/{CALIBRATION_FRAMES}",
+                    (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255),
+                    2
+                )
+
+                if calibration_counter >= CALIBRATION_FRAMES:
+                    calibrated = True
+                    print("Calibration complete")
+
+            # ================= ANGLES =================
+            index_angle = map_value(a, MIN_DIST["index"], MAX_DIST["index"], 180, 0)
+            middle_angle = map_value(b, MIN_DIST["middle"], MAX_DIST["middle"], 180, 0)
+            ring_angle = map_value(c, MIN_DIST["ring"], MAX_DIST["ring"], 180, 0)
+            pinky_angle = map_value(d, MIN_DIST["pinky"], MAX_DIST["pinky"], 180, 0)
+
+            thumb_angle = map_value(t, MIN_DIST["thumb"], MAX_DIST["thumb"], 0, 180)
+
+            # ================= ABDUCTION =================
+            abd_im = map_value(im, MIN_DIST["im"], MAX_DIST["im"], 0, 70)
+            abd_mr = map_value(mr, MIN_DIST["mr"], MAX_DIST["mr"], 0, 70)
+            abd_rp = map_value(rp, MIN_DIST["rp"], MAX_DIST["rp"], 0, 70)
+            abd_ti = map_value(ti, MIN_DIST["ti"], MAX_DIST["ti"], 0, 70)
+
+            # ================= OUTPUT =================
+            values = [
+                index_angle,
+                middle_angle,
+                ring_angle,
+                pinky_angle,
+                thumb_angle,
+                abd_im,
+                abd_mr,
+                abd_rp,
+                abd_ti
+            ]
+
+            # ================= SMOOTHING =================
+            for i in range(len(values)):
+                values[i] = int(alpha * prev_values[i] + (1 - alpha) * values[i])
+
+            prev_values = values.copy()
+
+            print(*values)
+
+            # ================= SERIAL =================
+            #if time.time() - last_send > 0.05:
+            #    try:
+            #        arduino.write(f"{','.join(map(str, values))}\n".encode())
+            #        last_send = time.time()
+            #    except:
+            #        pass
+
+            mp_draw.draw_landmarks(img, handLms, mp_hands.HAND_CONNECTIONS)
+
+    cv2.imshow("Fixed System", img)
+
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+cap.release()
+#arduino.close()
+cv2.destroyAllWindows()
