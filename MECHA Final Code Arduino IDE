@@ -1,0 +1,110 @@
+#include <Servo.h>
+
+
+Servo servoIndexFinger;
+Servo servoMiddleFinger;
+Servo servoRingFinger;
+Servo servoPinkyFinger;
+Servo servoThumb;
+
+
+Servo servoAbdIndex;
+Servo servoAbdMiddle;
+Servo servoAbdRing;
+Servo servoAbdPinky;
+
+
+void setup() {
+  Serial.begin(9600);
+
+
+  servoIndexFinger.attach(8);
+  servoMiddleFinger.attach(10);
+  servoRingFinger.attach(9);
+  servoPinkyFinger.attach(7);
+  servoThumb.attach(11);
+/**/
+  servoAbdIndex.attach(3);
+  servoAbdMiddle.attach(4);
+  servoAbdRing.attach(5);
+  servoAbdPinky.attach(13);
+}
+
+
+void loop() {
+  if (Serial.available() > 0) {
+
+
+    String data = Serial.readStringUntil('\n');
+    data.trim();
+
+
+    // Trova tutte le virgole
+    int comma1 = data.indexOf(',');
+    int comma2 = data.indexOf(',', comma1 + 1);
+    int comma3 = data.indexOf(',', comma2 + 1);
+    int comma4 = data.indexOf(',', comma3 + 1);
+    int comma5 = data.indexOf(',', comma4 + 1);
+    int comma6 = data.indexOf(',', comma5 + 1);
+    int comma7 = data.indexOf(',', comma6 + 1);
+    int comma8 = data.indexOf(',', comma7 + 1);
+
+
+    if (comma1 > 0 && comma2 > 0 && comma3 > 0 && comma4 > 0 &&
+        comma5 > 0 && comma6 > 0 && comma7 > 0) {
+
+
+      int angleIndex  = data.substring(0, comma1).toInt();
+      int angleMiddle = data.substring(comma1 + 1, comma2).toInt();
+      int angleRing   = data.substring(comma2 + 1, comma3).toInt();
+      int anglePinky  = data.substring(comma3 + 1, comma4).toInt();
+      int angleThumb  = data.substring(comma4 + 1, comma5).toInt();
+
+
+      int abd1 = data.substring(comma5 + 1, comma6).toInt();
+      int abd2 = data.substring(comma6 + 1, comma7).toInt();
+      int abd3 = data.substring(comma7 + 1, comma8).toInt();
+      int abd4 = data.substring(comma8 + 1).toInt();
+
+
+      // Limiti sicurezza
+      angleIndex  = constrain(angleIndex, 0, 180);
+      angleMiddle = constrain(angleMiddle, 0, 180);
+      angleRing   = constrain(angleRing, 0, 180);
+      anglePinky  = constrain(anglePinky, 0, 180);
+      angleThumb  = constrain(angleThumb, 0, 180);
+
+
+      abd1 = constrain(abd1, 0, 70);
+      abd2 = constrain(abd2, 0, 70);
+      abd3 = constrain(abd3, 0, 70);
+      abd4 = constrain(abd4, 0, 70);
+
+
+      // Scrittura servo
+      servoIndexFinger.write(angleIndex);
+      servoMiddleFinger.write(angleMiddle);
+      servoRingFinger.write(angleRing);
+      servoPinkyFinger.write(anglePinky);
+      servoThumb.write(angleThumb);
+
+
+      servoAbdIndex.write(abd1);
+      servoAbdMiddle.write(abd2);
+      servoAbdRing.write(abd3);
+      servoAbdPinky.write(abd4);
+
+
+      /*
+      Serial.print("Index: "); Serial.print(angleIndex);
+      Serial.print(" | Middle: "); Serial.print(angleMiddle);
+      Serial.print(" | Ring: "); Serial.print(angleRing);
+      Serial.print(" | Pinky: "); Serial.print(anglePinky);
+      Serial.print(" | Thumb: "); Serial.print(angleThumb);
+      Serial.print(" | ABD1: "); Serial.print(abd1);
+      Serial.print(" | ABD2: "); Serial.print(abd2);
+      Serial.print(" | ABD3: "); Serial.println(abd3);
+      */
+    }
+  }
+}
