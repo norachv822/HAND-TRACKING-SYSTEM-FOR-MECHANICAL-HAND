@@ -5,7 +5,7 @@ import serial
 import time
 
 # ================= SERIAL =================
-#arduino = serial.Serial('COM3', 9600)
+arduino = serial.Serial('COM3', 9600)
 time.sleep(2)
 last_send = 0
 
@@ -26,7 +26,7 @@ calibration_counter = 0
 calibrated = False
 
 prev_values = [0] * 9
-alpha = 0.7
+alpha = 0.3
 
 MIN_DIST = {
     "index": 1e9,
@@ -34,10 +34,10 @@ MIN_DIST = {
     "ring": 1e9,
     "pinky": 1e9,
     "thumb": 1e9,
-    "im": 1e9,
-    "mr": 1e9,
-    "rp": 1e9,
-    "ti": 1e9
+    "abd_index": 1e9,
+    "abd_middle": 1e9,
+    "abd_ring": 1e9,
+    "abd_pinky": 1e9,
 }
 
 MAX_DIST = {
@@ -46,10 +46,10 @@ MAX_DIST = {
     "ring": 0,
     "pinky": 0,
     "thumb": 0,
-    "im": 0,
-    "mr": 0,
-    "rp": 0,
-    "ti": 0
+    "abd_index": 0,
+    "abd_middle": 0,
+    "abd_ring": 0,
+    "abd_pinky": 0,
 }
 
 # ================= LANDMARKS =================
@@ -78,17 +78,15 @@ def safe(x):
 
 
 def proportions(d1, d2):
-    if d2 == 0:
+    if d2 < 1e-6:
         return 0
     return safe(d1 / d2)
 
 
 def map_value(val, in_min, in_max, out_min, out_max):
     val = safe(val)
-
     if in_min == in_max:
         return out_min
-
     val = max(in_min, min(val, in_max))
     return int((val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
 
@@ -103,26 +101,167 @@ def dist(base, tip, fingers_base, fingers_tip):
     )
 
 
-# ================= THUMB FIX =================
-def thumb_extension(fingers_tip, fingers_base):
+# ================= THUMB FLEXION (NUOVO - basato su X) =================
+def thumb_flexion_x(thumb_tip_pos, index_base_pos, pinky_base_pos, wrist_pos):
+    """
+    Calcola la flessione del pollice basata sulla posizione X.
 
-    wrist = fingers_base["wrist"]
-    thumb_tip = fingers_tip["thumb_tip"]
-    index_base = fingers_base["index_finger_base"]
+    Fase 1 (chiuso verso l'interno):
+      thumb_tip.x < index_base.x → angolo = 180° (clamp)
 
-    v1 = (thumb_tip[0] - wrist[0], thumb_tip[1] - wrist[1])
-    v2 = (index_base[0] - wrist[0], index_base[1] - wrist[1])
+    Fase 2 (aperto/esterno):
+      thumb_tip.x >= index_base.x → angolo riparte da 0°
 
-    mag1 = math.hypot(v1[0], v1[1])
-    mag2 = math.hypot(v2[0], v2[1])
+    Fase 3 (chiuso verso il mignolo):
+      thumb_tip.x supera pinky_base.x → angolo arriva a 180°
 
-    if mag1 == 0 or mag2 == 0:
+    Ritorna: valore da mappare (distanza X normalizzata)
+             e flag se è nella fase "chiuso verso interno"
+    """
+    # Determina direzione della mano (1 = mano destra, -1 = mano sinistra)
+    # Dopo cv2.flip(img, 1), la mano destra appare con polso a sinistra
+    hand_direction = 1 if wrist_pos[0] < index_base_pos[0] else -1
+
+    # Distanza thumb_tip da index_base nella direzione dell'interno
+    dx_from_index = (thumb_tip_pos[0] - index_base_pos[0]) * hand_direction
+
+    # Distanza thumb_tip da pinky_base nella direzione dell'interno
+    dx_from_pinky = (thumb_tip_pos[0] - pinky_base_pos[0]) * hand_direction
+
+    # Se thumb_tip è oltre index_base verso l'interno (dx_from_index < 0)
+    # → pollice chiuso verso il palmo
+    if dx_from_index < 0:
+        return None, True  # None = usa clamp 180, True = chiuso verso interno
+
+    # Altrimenti: thumb_tip è esterno o verso il mignolo
+    # Calcoliamo la distanza totale da index_base a pinky_base
+    span = (pinky_base_pos[0] - index_base_pos[0]) * hand_direction
+
+    if span == 0:
+        return 0, False
+
+    # Normalizza: 0 = a index_base, 1 = a pinky_base
+    # dx_from_index è >= 0 qui
+    normalized = dx_from_index / span
+
+    return normalized, False
+
+
+def is_thumb_closed_inward(thumb_tip_pos, index_base_pos, wrist_pos):
+    """
+    Verifica se il pollice è chiuso verso l'interno (palmo).
+    True se thumb_tip.x < index_base.x (verso l'interno).
+    """
+    hand_direction = 1 if wrist_pos[0] < index_base_pos[0] else -1
+    dx = (thumb_tip_pos[0] - index_base_pos[0]) * hand_direction
+    return dx < 0
+
+
+# ================= CHECK FINGER FULLY CLOSED (Y-axis) =================
+def is_finger_closed(tip_pos, base_pos, wrist_pos):
+    v_base_to_wrist = (wrist_pos[0] - base_pos[0], wrist_pos[1] - base_pos[1])
+    v_base_to_tip = (tip_pos[0] - base_pos[0], tip_pos[1] - base_pos[1])
+    dot = v_base_to_wrist[0] * v_base_to_tip[0] + v_base_to_wrist[1] * v_base_to_tip[1]
+    return dot > 0
+
+
+# ================= ABDUZIONE INDIVIDUALE =================
+def finger_abduction_angle(base_point, tip_target, tip_reference):
+    v_target = (tip_target[0] - base_point[0], tip_target[1] - base_point[1])
+    v_ref = (tip_reference[0] - base_point[0], tip_reference[1] - base_point[1])
+    mag_target = math.hypot(v_target[0], v_target[1])
+    mag_ref = math.hypot(v_ref[0], v_ref[1])
+    if mag_target < 1e-6 or mag_ref < 1e-6:
         return 0
+    dot = v_target[0] * v_ref[0] + v_target[1] * v_ref[1]
+    cos_angle = max(-1, min(1, dot / (mag_target * mag_ref)))
+    return math.degrees(math.acos(cos_angle))
 
-    dot = v1[0] * v2[0] + v1[1] * v2[1]
-    cos_angle = max(-1, min(1, dot / (mag1 * mag2)))
 
-    return math.degrees(math.acos(cos_angle))  # 0–180
+# ================= DRAW BARS =================
+def draw_bar(img, x, y, w, h, value, max_val, label, color):
+    ratio = min(1.0, max(0.0, value / max_val))
+    fill_w = int(w * ratio)
+    cv2.rectangle(img, (x, y), (x + w, y + h), (50, 50, 50), -1)
+    cv2.rectangle(img, (x, y), (x + fill_w, y + h), color, -1)
+    cv2.rectangle(img, (x, y), (x + w, y + h), (200, 200, 200), 1)
+    cv2.putText(img, f"{label}: {value}", (x, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+
+def draw_debug_panel(img, values, closed_flags, thumb_phase, h, w):
+    labels = ["Index", "Middle", "Ring", "Pinky", "Thumb", 
+              "Abd Index", "Abd Middle", "Abd Ring", "Abd Pinky"]
+    colors = [
+        (0, 165, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (0, 0, 255),
+        (255, 0, 255), (255, 255, 0), (128, 0, 128), (0, 128, 255),
+    ]
+
+    panel_x = 10
+    panel_y = 80
+    bar_w = 200
+    bar_h = 18
+    gap = 28
+
+    cv2.putText(img, "=== DEBUG PANEL ===", (panel_x, panel_y - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    for i, (val, label, color) in enumerate(zip(values, labels, colors)):
+        y_pos = panel_y + i * gap
+        max_val = 90 if i >= 5 else 180
+        draw_bar(img, panel_x, y_pos, bar_w, bar_h, val, max_val, label, color)
+
+        if i < 5 and closed_flags[i]:
+            cv2.putText(img, "[CLAMPED]", (panel_x + bar_w + 10, y_pos + 14),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
+    # Stato pollice
+    status_y = panel_y + len(values) * gap + 20
+    cv2.putText(img, "=== THUMB PHASE ===", (panel_x, status_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    if thumb_phase == 0:
+        phase_text = "CLOSED inward (180)"
+        phase_color = (0, 0, 255)
+    elif thumb_phase == 1:
+        phase_text = "OPEN (0-180)"
+        phase_color = (0, 255, 0)
+    else:
+        phase_text = "CLOSED toward pinky (180)"
+        phase_color = (0, 0, 255)
+
+    cv2.putText(img, phase_text, (panel_x, status_y + 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, phase_color, 1)
+
+    # Stato dita
+    status_y2 = status_y + 50
+    cv2.putText(img, "=== FINGER STATUS ===", (panel_x, status_y2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    finger_names = ["Index", "Middle", "Ring", "Pinky", "Thumb"]
+    for i, name in enumerate(finger_names):
+        angle = values[i]
+        if closed_flags[i]:
+            status = "CLOSED [MAX]"
+            color = (0, 0, 255)
+        else:
+            status = "OPEN" if angle < 90 else "CLOSED"
+            color = (0, 255, 0) if angle < 90 else (0, 0, 255)
+        cv2.putText(img, f"{name}: {status} ({angle}°)", 
+                    (panel_x, status_y2 + 25 + i * 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    abd_y = status_y2 + 25 + len(finger_names) * 22 + 10
+    cv2.putText(img, "=== ABDUCTION (individual) ===", (panel_x, abd_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    abd_labels = ["Index", "Middle", "Ring", "Pinky"]
+    for i, label in enumerate(abd_labels):
+        angle = values[5 + i]
+        status = "SPREAD" if angle > 20 else "CLOSE"
+        color = (0, 255, 0) if angle > 20 else (0, 0, 255)
+        cv2.putText(img, f"{label}: {status} ({angle}°)", 
+                    (panel_x, abd_y + 20 + i * 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
 
 # ================= MAIN LOOP =================
@@ -151,7 +290,40 @@ while True:
                 k: (int(handLms.landmark[i].x * w), int(handLms.landmark[i].y * h))
                 for k, i in LAND_MARKS_BASE.items()
             }
-#pin laterali 
+
+            wrist = fingers_base["wrist"]
+
+            # ================= CHECK FINGERS CLOSED =================
+            closed_index = is_finger_closed(
+                fingers_tip["index_finger_tip"], 
+                fingers_base["index_finger_base"], 
+                wrist
+            )
+            closed_middle = is_finger_closed(
+                fingers_tip["middle_finger_tip"], 
+                fingers_base["middle_finger_base"], 
+                wrist
+            )
+            closed_ring = is_finger_closed(
+                fingers_tip["ring_finger_tip"], 
+                fingers_base["ring_finger_base"], 
+                wrist
+            )
+            closed_pinky = is_finger_closed(
+                fingers_tip["pinky_finger_tip"], 
+                fingers_base["pinky_finger_base"], 
+                wrist
+            )
+
+            # Pollice: check chiuso verso interno
+            closed_thumb_inward = is_thumb_closed_inward(
+                fingers_tip["thumb_tip"],
+                fingers_base["index_finger_base"],
+                wrist
+            )
+
+            closed_flags = [closed_index, closed_middle, closed_ring, closed_pinky, closed_thumb_inward]
+
             # ================= FLEXION =================
             feedback = dist("wrist", "middle_finger_tip", fingers_base, fingers_tip)
 
@@ -163,14 +335,41 @@ while True:
             if any(math.isnan(x) for x in [a, b, c, d]):
                 continue
 
-            # ================= THUMB =================
-            t = thumb_extension(fingers_tip, fingers_base)
+            # ================= THUMB (NUOVO - 3 fasi) =================
+            thumb_norm, thumb_is_inward = thumb_flexion_x(
+                fingers_tip["thumb_tip"],
+                fingers_base["index_finger_base"],
+                fingers_base["pinky_finger_base"],
+                wrist
+            )
 
-            # ================= ABDUCTION =================
-            im = dist("index_finger_tip", "middle_finger_tip", fingers_base, fingers_tip)
-            mr = dist("middle_finger_tip", "ring_finger_tip", fingers_base, fingers_tip)
-            rp = dist("ring_finger_tip", "pinky_finger_tip", fingers_base, fingers_tip)
-            ti = dist("thumb_tip", "index_finger_tip", fingers_base, fingers_tip)
+            # ================= ABDUZIONE INDIVIDUALE =================
+            abd_index = finger_abduction_angle(
+                wrist,
+                fingers_tip["index_finger_tip"],
+                fingers_tip["middle_finger_tip"]
+            )
+            abd_middle_ind = finger_abduction_angle(
+                wrist,
+                fingers_tip["middle_finger_tip"],
+                fingers_tip["index_finger_tip"]
+            )
+            abd_middle_ring = finger_abduction_angle(
+                wrist,
+                fingers_tip["middle_finger_tip"],
+                fingers_tip["ring_finger_tip"]
+            )
+            abd_middle = (abd_middle_ind + abd_middle_ring) / 2
+            abd_ring = finger_abduction_angle(
+                wrist,
+                fingers_tip["ring_finger_tip"],
+                fingers_tip["middle_finger_tip"]
+            )
+            abd_pinky = finger_abduction_angle(
+                wrist,
+                fingers_tip["pinky_finger_tip"],
+                fingers_tip["ring_finger_tip"]
+            )
 
             # ================= CALIBRATION =================
             if not calibrated:
@@ -184,34 +383,31 @@ while True:
                     MIN_DIST[key] = min(MIN_DIST[key], val)
                     MAX_DIST[key] = max(MAX_DIST[key], val)
 
-                MIN_DIST["thumb"] = min(MIN_DIST["thumb"], t)
-                MAX_DIST["thumb"] = max(MAX_DIST["thumb"], t)
+                # Calibrazione pollice: salva valore normalizzato
+                if thumb_norm is not None:
+                    MIN_DIST["thumb"] = min(MIN_DIST["thumb"], thumb_norm)
+                    MAX_DIST["thumb"] = max(MAX_DIST["thumb"], thumb_norm)
 
-                MIN_DIST["im"] = min(MIN_DIST["im"], im)
-                MAX_DIST["im"] = max(MAX_DIST["im"], im)
+                MIN_DIST["abd_index"] = min(MIN_DIST["abd_index"], abd_index)
+                MAX_DIST["abd_index"] = max(MAX_DIST["abd_index"], abd_index)
+                MIN_DIST["abd_middle"] = min(MIN_DIST["abd_middle"], abd_middle)
+                MAX_DIST["abd_middle"] = max(MAX_DIST["abd_middle"], abd_middle)
+                MIN_DIST["abd_ring"] = min(MIN_DIST["abd_ring"], abd_ring)
+                MAX_DIST["abd_ring"] = max(MAX_DIST["abd_ring"], abd_ring)
+                MIN_DIST["abd_pinky"] = min(MIN_DIST["abd_pinky"], abd_pinky)
+                MAX_DIST["abd_pinky"] = max(MAX_DIST["abd_pinky"], abd_pinky)
 
-                MIN_DIST["mr"] = min(MIN_DIST["mr"], mr)
-                MAX_DIST["mr"] = max(MAX_DIST["mr"], mr)
-
-                MIN_DIST["rp"] = min(MIN_DIST["rp"], rp)
-                MAX_DIST["rp"] = max(MAX_DIST["rp"], rp)
-
-                MIN_DIST["ti"] = min(MIN_DIST["ti"], ti)
-                MAX_DIST["ti"] = max(MAX_DIST["ti"], ti)
-
-                cv2.putText(
-                    img,
-                    f"CALIBRATING {calibration_counter}/{CALIBRATION_FRAMES}",
-                    (10, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 255),
-                    2
-                )
+                cv2.putText(img, f"CALIBRATING {calibration_counter}/{CALIBRATION_FRAMES}",
+                            (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(img, "SPREAD fingers wide, then close together", (10, h - 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
                 if calibration_counter >= CALIBRATION_FRAMES:
                     calibrated = True
                     print("Calibration complete")
+                    print(f"Thumb range: {MIN_DIST['thumb']:.3f} to {MAX_DIST['thumb']:.3f}")
+
+                continue
 
             # ================= ANGLES =================
             index_angle = map_value(a, MIN_DIST["index"], MAX_DIST["index"], 180, 0)
@@ -219,50 +415,92 @@ while True:
             ring_angle = map_value(c, MIN_DIST["ring"], MAX_DIST["ring"], 180, 0)
             pinky_angle = map_value(d, MIN_DIST["pinky"], MAX_DIST["pinky"], 180, 0)
 
-            thumb_angle = map_value(t, MIN_DIST["thumb"], MAX_DIST["thumb"], 0, 180)
+            # ================= THUMB ANGLE (3 FASI) =================
+            if thumb_is_inward:
+                # FASE 0: Pollice chiuso verso l'interno (palmo)
+                thumb_angle = 180
+                thumb_phase = 0
+            elif thumb_norm is not None:
+                # FASE 1-2: Pollice esterno, da index_base a pinky_base
+                thumb_angle = map_value(thumb_norm, MIN_DIST["thumb"], MAX_DIST["thumb"], 0, 180)
+                thumb_phase = 1 if thumb_angle < 180 else 2
+            else:
+                thumb_angle = 180
+                thumb_phase = 0
 
-            # ================= ABDUCTION =================
-            abd_im = map_value(im, MIN_DIST["im"], MAX_DIST["im"], 0, 70)
-            abd_mr = map_value(mr, MIN_DIST["mr"], MAX_DIST["mr"], 0, 70)
-            abd_rp = map_value(rp, MIN_DIST["rp"], MAX_DIST["rp"], 0, 70)
-            abd_ti = map_value(ti, MIN_DIST["ti"], MAX_DIST["ti"], 0, 70)
+            # ================= CLAMP A 180 QUANDO CHIUSE =================
+            if closed_index:
+                index_angle = 180
+            if closed_middle:
+                middle_angle = 180
+            if closed_ring:
+                ring_angle = 180
+            if closed_pinky:
+                pinky_angle = 180
+            # Il pollice ha già il suo clamp integrato nelle 3 fasi
+
+            # ================= ABDUZIONE MAPPATA =================
+            abd_index_val = map_value(abd_index, MIN_DIST["abd_index"], MAX_DIST["abd_index"], 90, 0)
+            abd_middle_val = map_value(abd_middle, MIN_DIST["abd_middle"], MAX_DIST["abd_middle"], 0, 30)
+            abd_ring_val = map_value(abd_ring, MIN_DIST["abd_ring"], MAX_DIST["abd_ring"], 0, 40)
+            abd_pinky_val = map_value(abd_pinky, MIN_DIST["abd_pinky"], MAX_DIST["abd_pinky"], 0, 50)
 
             # ================= OUTPUT =================
             values = [
-                index_angle,
-                middle_angle,
-                ring_angle,
-                pinky_angle,
-                thumb_angle,
-                abd_im,
-                abd_mr,
-                abd_rp,
-                abd_ti
+                index_angle,      # 0
+                middle_angle,     # 1
+                ring_angle,       # 2
+                pinky_angle,      # 3
+                thumb_angle,      # 4
+                abd_index_val,    # 5
+                abd_middle_val,   # 6
+                abd_ring_val,     # 7
+                abd_pinky_val,    # 8
             ]
 
             # ================= SMOOTHING =================
             for i in range(len(values)):
-                values[i] = int(alpha * prev_values[i] + (1 - alpha) * values[i])
+                values[i] = int(alpha * values[i] + (1 - alpha) * prev_values[i])
 
             prev_values = values.copy()
 
             print(*values)
 
-            # ================= SERIAL =================
-            #if time.time() - last_send > 0.05:
-            #    try:
-            #        arduino.write(f"{','.join(map(str, values))}\n".encode())
-            #        last_send = time.time()
-            #    except:
-            #        pass
+            #================= SERIAL =================
+            if time.time() - last_send > 0.05:
+                try:
+                    arduino.write(f"{','.join(map(str, values))}\n".encode())
+                    last_send = time.time()
+                except:
+                    pass
+
+            # ================= DEBUG VISIVO =================
+            if calibrated:
+                draw_debug_panel(img, values, closed_flags, thumb_phase, h, w)
+
+            if not calibrated:
+                cv2.putText(img, "MOVE HAND: open/close + spread/close fingers", (10, h - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
             mp_draw.draw_landmarks(img, handLms, mp_hands.HAND_CONNECTIONS)
 
-    cv2.imshow("Fixed System", img)
+    else:
+        cv2.putText(img, "NO HAND DETECTED", (w//2 - 120, h//2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-    if cv2.waitKey(1) & 0xFF == 27:
+    cv2.imshow("Hand Tracking - Thumb 3 Phases", img)
+
+    key = cv2.waitKey(1) & 0xFF
+    if key == 27:
         break
+    elif key == ord('r'):
+        calibrated = False
+        calibration_counter = 0
+        MIN_DIST = {k: 1e9 for k in MIN_DIST}
+        MAX_DIST = {k: 0 for k in MAX_DIST}
+        prev_values = [0] * 9
+        print("Calibration reset")
 
 cap.release()
-#arduino.close()
+arduino.close()
 cv2.destroyAllWindows()
