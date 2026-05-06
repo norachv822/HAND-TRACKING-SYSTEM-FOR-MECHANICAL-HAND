@@ -24,10 +24,10 @@ void setup() {
   servoPinkyFinger.attach(7);
   servoThumb.attach(11);
 /**/
-  servoAbdIndex.attach(3);
-  servoAbdMiddle.attach(4);
-  servoAbdRing.attach(5);
-  servoAbdPinky.attach(13);
+  servoAbdIndex.attach(5);
+  servoAbdMiddle.attach(13);
+  servoAbdRing.attach(3);
+  servoAbdPinky.attach(4);
 }
 
 
@@ -75,10 +75,12 @@ void loop() {
       angleThumb  = constrain(angleThumb, 0, 180);
 
 
-      abd1 = constrain(abd1, 0, 70);
-      abd2 = constrain(abd2, 0, 70);
-      abd3 = constrain(abd3, 0, 70);
-      abd4 = constrain(abd4, 0, 70);
+      abd1 = constrain(abd1, 0, 180);
+      abd2 = constrain(abd2, 0, 180);
+      abd3 = constrain(abd3, 0, 180);
+      abd4 = constrain(abd4, 0, 180);
+
+
 
 
       // Scrittura servo
@@ -108,3 +110,4 @@ void loop() {
     }
   }
 }
+
